@@ -41,16 +41,24 @@ if torch.cuda.is_available():
     segments_tensors = segments_tensors.to('cuda')
     model.to('cuda')
 
+print('BERT testing:')
+
 # Predict hidden states features for each layer
 with torch.no_grad():
     # See the models docstrings for the detail of the inputs
     outputs = model(tokens_tensor, token_type_ids=segments_tensors)
+    print('outputs.shape:', outputs.shape)
+
     # Transformers models always output tuples.
     # See the models docstrings for the detail of all the outputs
     # In our case, the first element is the hidden state of the last layer of the Bert model
     encoded_layers = outputs[0]
+    print('encoded_layers.shape:', encoded_layers.shape)
+
 # We have encoded our input sequence in a FloatTensor of shape (batch size, sequence length, model hidden dimension)
 assert tuple(encoded_layers.shape) == (1, len(indexed_tokens), model.config.hidden_size)
+
+print('BERT for masked LM testing:')
 
 # Load pre-trained model (weights)
 model = BertForMaskedLM.from_pretrained('bert-base-uncased')
@@ -66,6 +74,8 @@ if torch.cuda.is_available():
 with torch.no_grad():
     outputs = model(tokens_tensor, token_type_ids=segments_tensors)
     predictions = outputs[0]
+    print('predictions.shape:', predictions.shape)
+    print('predictions:', predictions)
 
 # confirm we were able to predict 'henson'
 predicted_index = torch.argmax(predictions[0, masked_index]).item()

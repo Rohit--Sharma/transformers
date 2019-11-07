@@ -27,6 +27,32 @@ if is_tf_available():
 logger = logging.getLogger(__name__)
 
 
+def glue_convert_examples_to_cnn_features(examples, max_length=512):
+    data = {}
+
+    x, y = [], []
+    for input_ex in examples:
+        x.append(input_ex.text_a)
+        y.append(input_ex.label)
+    
+    data['x'], data['y'] = x, y
+
+    data['vocab'] = sorted(list(set([w for sent in data['x'] for w in sent])))
+    data['classes'] = sorted(list(set(data['y'])))
+    data['word_to_idx'] = {w: i for i, w in enumerate(data['vocab'])}
+    data['idx_to_word'] = {i: w for i, w in enumerate(data['vocab'])}
+
+    vocab_size = len(data['vocab'])
+
+    x = [[data['word_to_idx'][w] for w in sent] + 
+        [vocab_size + 1] * (max_length - len(sent)) for sent in data[x]]
+    y = [data['classes'].index(c) for c in data['y']]
+
+    data['x'], data['y'] = x, y
+
+    return data
+
+
 def glue_convert_examples_to_features(examples, tokenizer,
                                       max_length=512,
                                       task=None,

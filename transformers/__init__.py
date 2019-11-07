@@ -24,7 +24,7 @@ from .file_utils import (TRANSFORMERS_CACHE, PYTORCH_TRANSFORMERS_CACHE, PYTORCH
 
 from .data import (is_sklearn_available,
                    InputExample, InputFeatures, DataProcessor,
-                   glue_output_modes, glue_convert_examples_to_features,
+                   glue_output_modes, glue_convert_examples_to_features, glue_convert_examples_to_cnn_features
                    glue_processors, glue_tasks_num_labels)
 
 if is_sklearn_available():
@@ -47,6 +47,7 @@ from .tokenization_distilbert import DistilBertTokenizer
 from .configuration_utils import PretrainedConfig
 from .configuration_auto import AutoConfig
 from .configuration_bert import BertConfig, BERT_PRETRAINED_CONFIG_ARCHIVE_MAP
+from .configuration_cnn import CNNConfig
 from .configuration_openai import OpenAIGPTConfig, OPENAI_GPT_PRETRAINED_CONFIG_ARCHIVE_MAP
 from .configuration_transfo_xl import TransfoXLConfig, TRANSFO_XL_PRETRAINED_CONFIG_ARCHIVE_MAP
 from .configuration_gpt2 import GPT2Config, GPT2_PRETRAINED_CONFIG_ARCHIVE_MAP
@@ -68,6 +69,7 @@ if is_torch_available():
                                 BertForSequenceClassification, BertForMultipleChoice,
                                 BertForTokenClassification, BertForQuestionAnswering,
                                 load_tf_weights_in_bert, BERT_PRETRAINED_MODEL_ARCHIVE_MAP)
+    from .modeling_cnn import (CNN)
     from .modeling_openai import (OpenAIGPTPreTrainedModel, OpenAIGPTModel,
                                 OpenAIGPTLMHeadModel, OpenAIGPTDoubleHeadsModel,
                                 load_tf_weights_in_openai_gpt, OPENAI_GPT_PRETRAINED_MODEL_ARCHIVE_MAP)
