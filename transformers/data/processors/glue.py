@@ -37,16 +37,29 @@ def glue_convert_examples_to_cnn_features(examples, max_length=512):
     
     data['x'], data['y'] = x, y
 
+    # logger.info('****CNN Examples****')
+    # for i in range(5):
+    #     logger.info('x: %s' % str(x[i]))
+    #     logger.info('y: %s' % str(y[i]))
+
     data['vocab'] = sorted(list(set([w for sent in data['x'] for w in sent])))
     data['classes'] = sorted(list(set(data['y'])))
     data['word_to_idx'] = {w: i for i, w in enumerate(data['vocab'])}
     data['idx_to_word'] = {i: w for i, w in enumerate(data['vocab'])}
 
     vocab_size = len(data['vocab'])
+    logger.info('CNN emb vocab size: %s' % str(vocab_size))
 
     x = [[data['word_to_idx'][w] for w in sent] + 
-        [vocab_size + 1] * (max_length - len(sent)) for sent in data[x]]
+        [vocab_size + 1] * (max_length - len(sent)) for sent in data['x']]
+    # for i in range(len(x)):
+    #     logger.info('x size: %s' % str(len(x[i])))
     y = [data['classes'].index(c) for c in data['y']]
+
+    # logger.info('****CNN Features****')
+    # for i in range(5):
+    #     logger.info('x: %s' % str(x[i]))
+    #     logger.info('y: %s' % str(y[i]))
 
     data['x'], data['y'] = x, y
 

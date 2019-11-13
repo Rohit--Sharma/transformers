@@ -148,7 +148,7 @@ def train(args, train_dataset, model, tokenizer, cnn_model=None):
                 inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
             outputs = model(**inputs)
 
-            if cnn_model not None:
+            if cnn_model is not None:
                 cnn_inputs = batch[4]
                 cnn_outputs = cnn_model(cnn_inputs)
 
@@ -156,7 +156,7 @@ def train(args, train_dataset, model, tokenizer, cnn_model=None):
                 outputs = outputs[1] + cnn_outputs  # TODO: Print shape and verify
                 criterion = CrossEntropyLoss()
                 num_labels = 2
-                loss = criterion(outputs.view(-1, num_labels), inputs('labels').view(-1))
+                loss = criterion(outputs.view(-1, num_labels), inputs['labels'].view(-1))
             else:
                 loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
@@ -225,7 +225,7 @@ def evaluate(args, model, tokenizer, prefix=""):
 
     results = {}
     for eval_task, eval_output_dir in zip(eval_task_names, eval_outputs_dirs):
-        eval_dataset = load_and_cache_examples(args, eval_task, tokenizer, evaluate=True)
+        eval_dataset, cnn_data = load_and_cache_examples(args, eval_task, tokenizer, evaluate=True)
 
         if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
@@ -295,7 +295,7 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         list(filter(None, args.model_name_or_path.split('/'))).pop(),
         str(args.max_seq_length),
         str(task)))
-    if os.path.exists(cached_features_file) and not args.overwrite_cache:
+    if False and os.path.exists(cached_features_file) and not args.overwrite_cache:
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
     else:
@@ -334,7 +334,7 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
         all_labels = torch.tensor([f.label for f in features], dtype=torch.float)
 
     dataset = TensorDataset(all_input_ids, all_attention_mask, all_token_type_ids, all_labels, all_cnn_word_ids)
-    return dataset
+    return dataset, cnn_features
 
 
 def main():
@@ -359,7 +359,7 @@ def main():
                         help="Pretrained tokenizer name or path if not the same as model_name")
     parser.add_argument("--cache_dir", default="", type=str,
                         help="Where do you want to store the pre-trained models downloaded from s3")
-    parser.add_argument("--max_seq_length", default=128, type=int,
+    parser.add_argument("--max_seq_length", default=256, type=int,
                         help="The maximum total input sequence length after tokenization. Sequences longer "
                              "than this will be truncated, sequences shorter will be padded.")
     parser.add_argument("--do_train", action='store_true',
@@ -493,23 +493,31 @@ def main():
     args.model_type = args.model_type.lower()
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
     config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path, num_labels=num_labels, finetuning_task=args.task_name)
-    cnn_config = CNNConfig(word_emb_path=self.word_emb_path)
+    
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
     model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
-    cnn_model = CNN(cnn_config)
+    
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
 
     model.to(args.device)
-    cnn_model.to(args.device)
 
     logger.info("Training/evaluation parameters %s", args)
 
 
     # Training
     if args.do_train:
-        train_dataset = load_and_cache_examples(args, args.task_name, tokenizer, evaluate=False)
+        train_dataset, cnn_data = load_and_cache_examples(args, args.task_name, tokenizer, evaluate=False)
+
+        cnn_config = CNNConfig(max_sent_len=args.max_seq_length, 
+            vocab_size=len(cnn_data['vocab']),
+            word_emb_path=args.word_emb_path,
+            data=cnn_data
+        )
+        cnn_model = CNN(cnn_config)
+        cnn_model.to(args.device)
+
         global_step, tr_loss = train(args, train_dataset, model, tokenizer, cnn_model)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 

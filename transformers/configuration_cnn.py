@@ -21,6 +21,7 @@ import logging
 import sys
 
 from .configuration_utils import PretrainedConfig
+import numpy as np
 from gensim.models.keyedvectors import KeyedVectors
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class CNNConfig(PretrainedConfig):
                  filter_num=[100, 100, 100],
                  dropout_prob=0.5,
                  word_emb_path='',
+                 data={},
                  **kwargs):
         super(CNNConfig, self).__init__(**kwargs)
         self.model = model
