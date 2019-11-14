@@ -1,6 +1,9 @@
 import torch
+import logging
 import torch.nn as nn
 import torch.nn.functional as F
+
+logger = logging.getLogger(__name__)
 
 
 class CNN(nn.Module):
@@ -55,6 +58,7 @@ class CNN(nn.Module):
 
         x = torch.cat(conv_results, 1)
         x = F.dropout(x, p=self.dropout_prob, training=self.training)
-        x = self.fc(x)
+        # logging.info('CNN fc shape: %s' % str(x.shape))
+        # x = self.fc(x)
 
         return x

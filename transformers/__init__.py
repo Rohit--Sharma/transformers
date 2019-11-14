@@ -48,6 +48,7 @@ from .configuration_utils import PretrainedConfig
 from .configuration_auto import AutoConfig
 from .configuration_bert import BertConfig, BERT_PRETRAINED_CONFIG_ARCHIVE_MAP
 from .configuration_cnn import CNNConfig
+from .configuration_classifier import ClassifierConfig
 from .configuration_openai import OpenAIGPTConfig, OPENAI_GPT_PRETRAINED_CONFIG_ARCHIVE_MAP
 from .configuration_transfo_xl import TransfoXLConfig, TRANSFO_XL_PRETRAINED_CONFIG_ARCHIVE_MAP
 from .configuration_gpt2 import GPT2Config, GPT2_PRETRAINED_CONFIG_ARCHIVE_MAP
@@ -70,6 +71,7 @@ if is_torch_available():
                                 BertForTokenClassification, BertForQuestionAnswering,
                                 load_tf_weights_in_bert, BERT_PRETRAINED_MODEL_ARCHIVE_MAP)
     from .modeling_cnn import (CNN)
+    from .modeling_classifier import (LinearClassifier)
     from .modeling_openai import (OpenAIGPTPreTrainedModel, OpenAIGPTModel,
                                 OpenAIGPTLMHeadModel, OpenAIGPTDoubleHeadsModel,
                                 load_tf_weights_in_openai_gpt, OPENAI_GPT_PRETRAINED_MODEL_ARCHIVE_MAP)

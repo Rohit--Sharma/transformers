@@ -25,6 +25,8 @@ import random
 
 import numpy as np
 import torch
+from torch import nn
+import torch.nn.functional as F
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
 from torch.utils.data.distributed import DistributedSampler
@@ -38,8 +40,10 @@ except:
 from tqdm import tqdm, trange
 
 from transformers import (WEIGHTS_NAME, BertConfig,
+                                  BertModel,
                                   BertForSequenceClassification, BertTokenizer,
                                   CNNConfig, CNN,
+                                  ClassifierConfig, LinearClassifier,
                                   RobertaConfig,
                                   RobertaForSequenceClassification,
                                   RobertaTokenizer,
@@ -65,7 +69,8 @@ ALL_MODELS = sum((tuple(conf.pretrained_config_archive_map.keys()) for conf in (
                                                                                 RobertaConfig, DistilBertConfig)), ())
 
 MODEL_CLASSES = {
-    'bert': (BertConfig, BertForSequenceClassification, BertTokenizer),
+    'bert': (BertConfig, BertModel, BertTokenizer),
+    'bert1': (BertConfig, BertForSequenceClassification, BertTokenizer),
     'xlnet': (XLNetConfig, XLNetForSequenceClassification, XLNetTokenizer),
     'xlm': (XLMConfig, XLMForSequenceClassification, XLMTokenizer),
     'roberta': (RobertaConfig, RobertaForSequenceClassification, RobertaTokenizer),
@@ -81,7 +86,7 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
-def train(args, train_dataset, model, tokenizer, cnn_model=None):
+def train(args, train_dataset, model, tokenizer, classif_model, cnn_model=None):
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
@@ -142,23 +147,23 @@ def train(args, train_dataset, model, tokenizer, cnn_model=None):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
             inputs = {'input_ids':      batch[0],
-                      'attention_mask': batch[1],
-                      'labels':         batch[3]}
+                      'attention_mask': batch[1]}
             if args.model_type != 'distilbert':
                 inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
             outputs = model(**inputs)
+            bert_hidden = outputs[1]
+            num_labels = 2
 
             if cnn_model is not None:
                 cnn_inputs = batch[4]
-                cnn_outputs = cnn_model(cnn_inputs)
-
-                # Concatenate BERT final layer and cnn model preds
-                outputs = outputs[1] + cnn_outputs  # TODO: Print shape and verify
-                criterion = CrossEntropyLoss()
-                num_labels = 2
-                loss = criterion(outputs.view(-1, num_labels), inputs['labels'].view(-1))
+                cnn_hidden = cnn_model(cnn_inputs)
             else:
-                loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
+                cnn_hidden = None
+
+            classif_inps = {'bert_last_layer': bert_hidden,
+                'cnn_last_layer': cnn_hidden,
+                'labels': batch[3]}
+            loss, _ = classif_model(**classif_inps)
 
             if args.n_gpu > 1:
                 loss = loss.mean() # mean() to average on multi-gpu parallel training
@@ -218,7 +223,7 @@ def train(args, train_dataset, model, tokenizer, cnn_model=None):
     return global_step, tr_loss / global_step
 
 
-def evaluate(args, model, tokenizer, prefix=""):
+def evaluate(args, model, tokenizer, classif_model, prefix="", cnn_model=None):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
     eval_task_names = ("mnli", "mnli-mm") if args.task_name == "mnli" else (args.task_name,)
     eval_outputs_dirs = (args.output_dir, args.output_dir + '-MM') if args.task_name == "mnli" else (args.output_dir,)
@@ -245,25 +250,41 @@ def evaluate(args, model, tokenizer, prefix=""):
         out_label_ids = None
         for batch in tqdm(eval_dataloader, desc="Evaluating"):
             model.eval()
+            classif_model.eval()
             batch = tuple(t.to(args.device) for t in batch)
 
             with torch.no_grad():
                 inputs = {'input_ids':      batch[0],
-                          'attention_mask': batch[1],
-                          'labels':         batch[3]}
+                          'attention_mask': batch[1]}
                 if args.model_type != 'distilbert':
                     inputs['token_type_ids'] = batch[2] if args.model_type in ['bert', 'xlnet'] else None  # XLM, DistilBERT and RoBERTa don't use segment_ids
                 outputs = model(**inputs)
-                tmp_eval_loss, logits = outputs[:2]
+
+                bert_hidden = outputs[1]
+
+                num_labels = 2
+
+                if cnn_model is not None:
+                    cnn_model.eval()
+                    cnn_inputs = batch[4]
+                    cnn_hidden = cnn_model(cnn_inputs)
+                else:
+                    cnn_hidden = None
+                
+                classif_inps = {'bert_last_layer': bert_hidden,
+                'cnn_last_layer': cnn_hidden,
+                'labels': batch[3]}
+
+                tmp_eval_loss, logits = classif_model(**classif_inps)
 
                 eval_loss += tmp_eval_loss.mean().item()
             nb_eval_steps += 1
             if preds is None:
                 preds = logits.detach().cpu().numpy()
-                out_label_ids = inputs['labels'].detach().cpu().numpy()
+                out_label_ids = batch[3].detach().cpu().numpy()
             else:
                 preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-                out_label_ids = np.append(out_label_ids, inputs['labels'].detach().cpu().numpy(), axis=0)
+                out_label_ids = np.append(out_label_ids, batch[3].detach().cpu().numpy(), axis=0)
 
         eval_loss = eval_loss / nb_eval_steps
         if args.output_mode == "classification":
@@ -362,6 +383,8 @@ def main():
     parser.add_argument("--max_seq_length", default=256, type=int,
                         help="The maximum total input sequence length after tokenization. Sequences longer "
                              "than this will be truncated, sequences shorter will be padded.")
+    parser.add_argument("--cnn_train", action='store_true',
+                        help="Whether to train cnn model.")
     parser.add_argument("--do_train", action='store_true',
                         help="Whether to run training.")
     parser.add_argument("--do_eval", action='store_true',
@@ -497,6 +520,9 @@ def main():
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path, do_lower_case=args.do_lower_case)
     model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
     
+    classifier_config = ClassifierConfig(cnn_train=args.cnn_train)
+    classifier_model = LinearClassifier(classifier_config)
+    classifier_model.to(args.device)
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
@@ -510,15 +536,18 @@ def main():
     if args.do_train:
         train_dataset, cnn_data = load_and_cache_examples(args, args.task_name, tokenizer, evaluate=False)
 
-        cnn_config = CNNConfig(max_sent_len=args.max_seq_length, 
-            vocab_size=len(cnn_data['vocab']),
-            word_emb_path=args.word_emb_path,
-            data=cnn_data
-        )
-        cnn_model = CNN(cnn_config)
-        cnn_model.to(args.device)
+        if args.cnn_train:
+            cnn_config = CNNConfig(max_sent_len=args.max_seq_length, 
+                vocab_size=len(cnn_data['vocab']),
+                word_emb_path=args.word_emb_path,
+                data=cnn_data
+            )
+            cnn_model = CNN(cnn_config)
+            cnn_model.to(args.device)
+            global_step, tr_loss = train(args, train_dataset, model, tokenizer, cnn_model=cnn_model, classif_model=classifier_model)
+        else:
+            global_step, tr_loss = train(args, train_dataset, model, tokenizer, classif_model=classifier_model)
 
-        global_step, tr_loss = train(args, train_dataset, model, tokenizer, cnn_model)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
 
@@ -543,6 +572,22 @@ def main():
         tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
         model.to(args.device)
 
+        # Saving the classifier model
+        classif_model_dir = os.path.join(args.output_dir, 'classifier')
+        if not os.path.exists(classif_model_dir) and args.local_rank in [-1, 0]:
+            os.makedirs(classif_model_dir)
+        torch.save(classifier_model, os.path.join(classif_model_dir, 'pytorch_model.bin'))
+        torch.save(classifier_config, os.path.join(classif_model_dir, 'config.json'))
+
+        if args.cnn_train:
+            # Save CNN model and config
+            cnn_model_dir = os.path.join(args.output_dir, 'cnn')
+            if not os.path.exists(cnn_model_dir) and args.local_rank in [-1, 0]:
+                os.makedirs(cnn_model_dir)
+            
+            torch.save(cnn_model, os.path.join(cnn_model_dir, 'pytorch_model.bin'))
+            torch.save(cnn_config, os.path.join(cnn_model_dir, 'config.json'))
+
 
     # Evaluation
     results = {}
@@ -559,7 +604,17 @@ def main():
             
             model = model_class.from_pretrained(checkpoint)
             model.to(args.device)
-            result = evaluate(args, model, tokenizer, prefix=prefix)
+
+            classifier_model = torch.load(os.path.join(args.output_dir, 'classifier', 'pytorch_model.bin'))
+            classifier_model.to(args.device)
+
+            if args.cnn_train:
+                cnn_model = torch.load(os.path.join(args.output_dir, 'cnn', 'pytorch_model.bin'))
+                cnn_model.to(args.device)
+            else:
+                cnn_model = None
+            
+            result = evaluate(args, model, tokenizer, prefix=prefix, cnn_model=cnn_model, classif_model=classifier_model)
             result = dict((k + '_{}'.format(global_step), v) for k, v in result.items())
             results.update(result)
 

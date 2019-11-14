@@ -8,6 +8,7 @@
 module load cuda/9.0 groupmods/cudnn/9.2
 
 nvidia-smi
+# export TASK_NAME="CoLA"
 export TASK_NAME="MRPC"
 
 echo "Starting job at:"
@@ -17,7 +18,6 @@ time python3 simpletran_bert.py \
     --model_type bert \
     --model_name_or_path bert-base-uncased \
     --task_name $TASK_NAME \
-    --cnn_train \
     --do_train \
     --do_eval \
     --do_lower_case \
