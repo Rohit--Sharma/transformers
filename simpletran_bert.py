@@ -336,6 +336,7 @@ def load_and_cache_examples(args, task, tokenizer, evaluate=False):
                                                 pad_token_segment_id=4 if args.model_type in ['xlnet'] else 0,
                                                )
         cnn_features = convert_examples_to_cnn_features(examples,
+                                                tokenizer,
                                                 max_length=args.max_seq_length)
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
