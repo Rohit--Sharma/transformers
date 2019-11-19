@@ -3,11 +3,12 @@
 #SBATCH --output=slurm_out/job_output-%j.txt
 #SBATCH --mail-user=rohit.sharma@euler.wacc.wisc.edu
 #SBATCH --time=1-12:00:00
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:titanrtx:1
 
 module load cuda/9.0 groupmods/cudnn/9.2
 
 nvidia-smi
+# export TASK_NAME="CoLA"
 export TASK_NAME="MRPC"
 
 echo "Starting job at:"

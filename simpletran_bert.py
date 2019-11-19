@@ -26,6 +26,8 @@ import random
 import numpy as np
 import torch
 from torch import nn
+import torch.optim as optim
+from itertools import chain
 import torch.nn.functional as F
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
@@ -86,6 +88,46 @@ def set_seed(args):
         torch.cuda.manual_seed_all(args.seed)
 
 
+def train_cnn(args, train_dataset, cnn_model):
+    """Train the CNN model for few epochs before using it with BERT
+    
+    Arguments:
+        args {dict} -- cmd line arguments
+        train_dataset {[type]} -- [description]
+        cnn_model {nn.Module} -- CNN model to be trained
+    """
+    logger.info("***** Training CNN model for %s epochs *****" % str(args.num_cnn_train_epochs))
+    args.train_batch_size = args.per_gpu_cnn_train_batch_size * max(1, args.n_gpu)
+    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+
+    model_params = filter(lambda p: p.requires_grad, cnn_model.parameters())
+    optimizer = optim.Adadelta(model_params, args.cnn_learning_rate)
+    criterion = CrossEntropyLoss()
+
+    train_iterator = trange(int(args.num_cnn_train_epochs), desc="Epoch")
+    set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
+    cnn_model.train()
+    for _ in train_iterator:
+        epoch_iterator = tqdm(train_dataloader, desc='Iteration')
+        avg_loss = 0
+        for step, batch in enumerate(epoch_iterator):
+            batch = tuple(t.to(args.device) for t in batch)
+            inputs = batch[4]
+            labels = batch[3]
+
+            optimizer.zero_grad()
+            outputs = cnn_model(inputs)
+            loss = criterion(outputs, labels)
+            avg_loss += loss.item()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model_params, args.max_grad_norm)
+            optimizer.step()
+        logger.info('CNN Loss: %s' % str(avg_loss / step))
+    logger.info("********** CNN model trained **********")
+    return cnn_model
+
+
 def train(args, train_dataset, model, tokenizer, classif_model, cnn_model=None):
     """ Train the model """
     if args.local_rank in [-1, 0]:
@@ -103,9 +145,10 @@ def train(args, train_dataset, model, tokenizer, classif_model, cnn_model=None):
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ['bias', 'LayerNorm.weight']
+    named_params = chain(model.named_parameters(), cnn_model.named_parameters(), classif_model.named_parameters()) if cnn_model is not None else chain(model.named_parameters(), classif_model.named_parameters())
     optimizer_grouped_parameters = [
-        {'params': [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
-        {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
+        {'params': [p for n, p in named_params if not any(nd in n for nd in no_decay)], 'weight_decay': args.weight_decay},
+        {'params': [p for n, p in named_params if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
         ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = WarmupLinearSchedule(optimizer, warmup_steps=args.warmup_steps, t_total=t_total)
@@ -139,12 +182,18 @@ def train(args, train_dataset, model, tokenizer, classif_model, cnn_model=None):
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
+    if cnn_model is not None:
+        cnn_model.zero_grad()
+    classif_model.zero_grad()
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
     for _ in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
             model.train()
+            if cnn_model is not None:
+                cnn_model.train()
+            classif_model.train()
             batch = tuple(t.to(args.device) for t in batch)
             inputs = {'input_ids':      batch[0],
                       'attention_mask': batch[1]}
@@ -177,12 +226,17 @@ def train(args, train_dataset, model, tokenizer, classif_model, cnn_model=None):
             else:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                if cnn_model is not None:
+                    torch.nn.utils.clip_grad_norm_(cnn_model.parameters(), args.max_grad_norm)
 
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0 and not args.tpu:
                 optimizer.step()
                 scheduler.step()  # Update learning rate schedule
                 model.zero_grad()
+                if cnn_model is not None:
+                    cnn_model.zero_grad()
+                classif_model.zero_grad()
                 global_step += 1
 
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
@@ -208,6 +262,9 @@ def train(args, train_dataset, model, tokenizer, classif_model, cnn_model=None):
             if args.tpu:
                 args.xla_model.optimizer_step(optimizer, barrier=True)
                 model.zero_grad()
+                if cnn_model is not None:
+                    cnn_model.zero_grad()
+                classif_model.zero_grad()
                 global_step += 1
 
             if args.max_steps > 0 and global_step > args.max_steps:
@@ -395,6 +452,8 @@ def main():
     parser.add_argument("--do_lower_case", action='store_true',
                         help="Set this flag if you are using an uncased model.")
 
+    parser.add_argument("--per_gpu_cnn_train_batch_size", default=50, type=int,
+                        help="Batch size per GPU/CPU for training.")
     parser.add_argument("--per_gpu_train_batch_size", default=8, type=int,
                         help="Batch size per GPU/CPU for training.")
     parser.add_argument("--per_gpu_eval_batch_size", default=8, type=int,
@@ -403,6 +462,8 @@ def main():
                         help="Number of updates steps to accumulate before performing a backward/update pass.")
     parser.add_argument("--learning_rate", default=5e-5, type=float,
                         help="The initial learning rate for Adam.")
+    parser.add_argument("--cnn_learning_rate", default=0.9, type=float,
+                        help="The initial learning rate for training CNN model using Adadelta.")
     parser.add_argument("--weight_decay", default=0.0, type=float,
                         help="Weight deay if we apply some.")
     parser.add_argument("--adam_epsilon", default=1e-8, type=float,
@@ -411,6 +472,8 @@ def main():
                         help="Max gradient norm.")
     parser.add_argument("--num_train_epochs", default=3.0, type=float,
                         help="Total number of training epochs to perform.")
+    parser.add_argument("--num_cnn_train_epochs", default=100, type=int,
+                        help="Total number of max training epochs to perform CNN training.")
     parser.add_argument("--max_steps", default=-1, type=int,
                         help="If > 0: set total number of training steps to perform. Override num_train_epochs.")
     parser.add_argument("--warmup_steps", default=0, type=int,
@@ -545,6 +608,10 @@ def main():
             )
             cnn_model = CNN(cnn_config)
             cnn_model.to(args.device)
+
+            # Train CNN model for few epochs first
+            cnn_model = train_cnn(args, train_dataset, cnn_model)
+
             global_step, tr_loss = train(args, train_dataset, model, tokenizer, cnn_model=cnn_model, classif_model=classifier_model)
         else:
             global_step, tr_loss = train(args, train_dataset, model, tokenizer, classif_model=classifier_model)
