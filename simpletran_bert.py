@@ -45,7 +45,8 @@ from transformers import (WEIGHTS_NAME, BertConfig,
                                   BertModel,
                                   BertForSequenceClassification, BertTokenizer,
                                   CNNConfig, CNN,
-                                  ClassifierConfig, LinearClassifier,
+                                  ClassifierConfig, 
+                                  LinearClassifier, MultiCNNFCLayerClassifier,
                                   RobertaConfig,
                                   RobertaForSequenceClassification,
                                   RobertaTokenizer,
@@ -443,6 +444,8 @@ def main():
                              "than this will be truncated, sequences shorter will be padded.")
     parser.add_argument("--cnn_train", action='store_true',
                         help="Whether to train cnn model.")
+    parser.add_argument('--multi_cnn_layer', action='store_true',
+                        help='Use multiple (currently 3) fc layers in CNN architecture')
     parser.add_argument("--do_train", action='store_true',
                         help="Whether to run training.")
     parser.add_argument("--do_eval", action='store_true',
@@ -585,7 +588,12 @@ def main():
     model = model_class.from_pretrained(args.model_name_or_path, from_tf=bool('.ckpt' in args.model_name_or_path), config=config)
     
     classifier_config = ClassifierConfig(cnn_train=args.cnn_train)
-    classifier_model = LinearClassifier(classifier_config)
+    if args.multi_cnn_layer:
+        logger.info('Training with multiple fc layered CNN architecture')
+        classifier_model = MultiCNNFCLayerClassifier(classifier_config)
+    else:
+        logger.info('Training with single fc layered CNN architecture')
+        classif_model = LinearClassifier(classifier_config)
     classifier_model.to(args.device)
 
     if args.local_rank == 0:
